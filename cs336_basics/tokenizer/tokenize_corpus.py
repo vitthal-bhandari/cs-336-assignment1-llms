@@ -6,10 +6,15 @@ from collections import defaultdict
 class Tokenizer:
     def __init__(self, corpus):
         self.corpus = corpus
-        self.tokens = defaultdict(int)
+        
+        def default_tok_value():
+            return (0, 0)
+        
+        self.tokens = defaultdict(default_tok_value) # str -> (int, int) : preserves pre-token counts and indexes in a tuple
+        self.tokenslist = [] # indexed list of pre-tokens for faster retrieval
         self.vocabulary = set(bytes([i for i in range(256)]))
         self.merges = []
-        print(self.vocabulary)
+        # print(self.vocabulary)
 
     def find_chunk_boundaries(
         self,
@@ -58,7 +63,11 @@ class Tokenizer:
         # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
         return sorted(set(chunk_boundaries))
     
-    def pretok_regex(self, text: str, special_tokens: list[str]) -> list[str]:
+    def pretok_regex(
+        self, 
+        text: str, 
+        special_tokens: list[str]
+    ) -> list[str]:
         # Split documents based on special tokens
         docs=re.split("|".join([re.escape(sp_token) for sp_token in special_tokens]), text)
         # Define regex pattern for pre-tokenization
@@ -70,68 +79,194 @@ class Tokenizer:
             print(f"Document {i}:")
             # print(doc)
             i=i+1
-            tokenized_doc = re.finditer(PAT, doc)
-            for token in tokenized_doc:
-                self.tokens[token.group().encode("utf-8")] += 1
-            print(self.tokens)
+            if i == 1:
+                tokenized_doc = re.finditer(PAT, doc)
+                for token in tokenized_doc:
+                    t = token.group().encode("utf-8")
+                    if t not in self.tokens:
+                        self.tokenslist.append(t)
+                        self.tokens[t] = (1, len(self.tokenslist)-1) # indexes
+                    else:
+                        self.tokens[t] = (self.tokens[t][0]+1, self.tokens[t][1]) # counts
+
+                print('self.tokens: \n', self.tokens)
+                print('self.tokenslist: \n', self.tokenslist)
 
     def split_tok(self) -> list[str]:
+        
+        # utility functions
         def default_tuple_value():
             return (0, [])
+        def convert_to_bytes(obj):
+            return bytes([obj]) if isinstance(obj, int) else obj
+        
+        # defining temporary vocabulary
         temp_vocab = defaultdict(default_tuple_value)
-        for token, count in self.tokens.items():
+        for token, value in self.tokens.items():
             for i in range(len(token) - 1):
-                before = token[i-1] if i-1 >= 0 else None
-                after = token[i + 2] if i + 2 < len(token) else None
-                currElement = (token[i], token[i+1])
-                newCount = temp_vocab[currElement][0] + count
-                newNeighbors = temp_vocab[currElement][1] + [(before, after)]
+                # before = token[i-1] if i-1 >= 0 else None
+                # after = token[i + 2] if i + 2 < len(token) else None
+                currElement = (bytes([token[i]]), bytes([token[i+1]]))
+                newCount = temp_vocab[currElement][0] + value[0]
+                newNeighbors = temp_vocab[currElement][1] + [(value[1], i)]
                 temp_vocab[currElement] = (newCount, newNeighbors)
         
-        temp_vocab_sorted = {k: v for k, v in sorted(temp_vocab.items(), key=lambda item: (item[1][0], item[0][0], item[0][1]), reverse=True)}
-        print(len(temp_vocab_sorted))
-        print(temp_vocab_sorted) 
-        # now we want to begin merging until we obtain 10k merges
-        while len(self.temp_vocab_sorted) < 10000:
+        print('temp_vocab: \n', temp_vocab)
+
+        temp_vocab_sorted = temp_vocab
+
+        while len(temp_vocab_sorted.keys()) > 6:
+
+            # sort vocabulary
+            temp_vocab_sorted = {k: v for k, v in sorted(temp_vocab_sorted.items(), key=lambda item: (item[1][0], item[0][0], item[0][1]), reverse=True)}
+            print('Current Vocabulary')
+            print(len(temp_vocab_sorted))
+            for k, v in temp_vocab_sorted.items():
+                print(f'{k} : count = {v[0]} nei = {v[1]}')
+
             # get the highest count pair
             most_freq_pair = next(iter(temp_vocab_sorted))
+            part1 = bytes([most_freq_pair[0]]) if isinstance(most_freq_pair[0], int) else most_freq_pair[0]
+            part2 = bytes([most_freq_pair[1]]) if isinstance(most_freq_pair[1], int) else most_freq_pair[1]
+            merged_token = part1 + part2
 
-            # put this in the merges list
-            self.merges.append(most_freq_pair)
+            for obj in temp_vocab_sorted[most_freq_pair][1]:
+                word = self.tokenslist[obj[0]]
+                idx = obj[1]
 
-            # iterate through this pair's neighbors and update the tokens
-            neighbors = temp_vocab_sorted[most_freq_pair][1]
-            for before, after in neighbors:
+                # for this word, starting at idx, we want to merge the most_freq_pair
+                # thus we reduce counters for the pairs (before, first) and (second, after)
+                # and we increase the counter for the new merged token
+                before = bytes([word[idx-1]]) if idx-1 >= 0 else None
+                after = bytes([word[idx + len(merged_token)]]) if idx + len(merged_token) < len(word) else None
 
-                # update the keys of before and after token tuples
-                if before is not None:
-                    before_pair = (before, most_freq_pair[0])
-                    new_before_pair = (before, b"".join(most_freq_pair))
-                    if before_pair in temp_vocab_sorted:
-                        temp_vocab_sorted[new_before_pair] = temp_vocab_sorted.pop(before_pair)
-                        # after updating the key, we need to update the neighbors list
-                        updated_neighbors = []
-                        for n_before, n_after in temp_vocab_sorted[new_before_pair][1]:
-                            if n_after == most_freq_pair[1]:
-                                updated_neighbors.append((n_before, after))
-                            else:
-                                updated_neighbors.append((n_before, n_after))
+                if before:
+                    prev_global_cnt = temp_vocab_sorted[(before, part1)][0]
+                    prev_neighbors = temp_vocab_sorted[(before, most_freq_pair[0])][1]
+                    if prev_global_cnt - self.tokens[word][0] <= 0:
+                        temp_vocab_sorted.pop((before, most_freq_pair[0]))
+                    else:
+                        old_list = [n for n in temp_vocab_sorted[(before, most_freq_pair[0])][1] if n[0] != obj[0]]
+                        temp_vocab_sorted[(before, most_freq_pair[0])] = (prev_global_cnt - self.tokens[word][0], old_list)
+                    
+                    # now we need to add the new merged token to the vocab
+                    new_pair = (before, merged_token)
+                    if new_pair in temp_vocab_sorted:
+                        existing_cnt = temp_vocab_sorted[new_pair][0]
+                        existing_neighbors = temp_vocab_sorted[new_pair][1]
+                        temp_vocab_sorted[new_pair] = (existing_cnt + self.tokens[word][0], existing_neighbors)
+                    else:
+                        temp_vocab_sorted[new_pair] = (self.tokens[word][0], []) # need to update neighbors below
+                    # the indices of the neighbors need to be updated to reflect the merged token
+                    # all indices will shift back by len(part1)
+                    updated_neighbors = temp_vocab_sorted[new_pair][1]
+                    updated_neighbors.append((obj[0], idx - 1))
+                    temp_vocab_sorted[new_pair] = (temp_vocab_sorted[new_pair][0], updated_neighbors)
                 
-                if after is not None:
-                    after_pair = (most_freq_pair[1], after)
-                    new_after_pair = (b"".join(most_freq_pair), after)
-                    if after_pair in temp_vocab_sorted:
-                        temp_vocab_sorted[new_after_pair] = temp_vocab_sorted.pop(after_pair)
-                        # after updating the key, we need to update the neighbors list
-                        updated_neighbors = []
-                        for n_before, n_after in temp_vocab_sorted[new_after_pair][1]:
-                            if n_before == most_freq_pair[0]:
-                                updated_neighbors.append((before, n_after))
-                            else:
-                                updated_neighbors.append((n_before, n_after))
+                if after:
+                    prev_global_cnt = temp_vocab_sorted[(part2, after)][0]
+                    prev_neighbors = temp_vocab_sorted[(part2, after)][1]
+                    if prev_global_cnt - self.tokens[word][0] <= 0:
+                        temp_vocab_sorted.pop((part2, after))
+                    else:
+                        old_list = [n for n in temp_vocab_sorted[(part2, after)][1] if n[0] != obj[0]]
+                        temp_vocab_sorted[(part2, after)] = (prev_global_cnt - self.tokens[word][0], old_list)
+                    
+                    # now we need to add the new merged token to the vocab
+                    new_pair = (merged_token, after)
+                    if new_pair in temp_vocab_sorted:
+                        existing_cnt = temp_vocab_sorted[new_pair][0]
+                        existing_neighbors = temp_vocab_sorted[new_pair][1]
+                        temp_vocab_sorted[new_pair] = (existing_cnt + self.tokens[word][0], existing_neighbors)
+                    else:
+                        temp_vocab_sorted[new_pair] = (self.tokens[word][0], []) # need to update neighbors below
+                    # the indices of the neighbors need to be updated to reflect the merged token
+                    # all indices will shift back by len(part1)
+                    updated_neighbors = temp_vocab_sorted[new_pair][1]
+                    updated_neighbors.append((obj[0], idx))
+                    temp_vocab_sorted[new_pair] = (temp_vocab_sorted[new_pair][0], updated_neighbors)
 
+            # oops we also need to remove the existing most_freq_pair
+            temp_vocab_sorted.pop(most_freq_pair)
+
+        print('Final Vocabulary After Merging')
         print(len(temp_vocab_sorted))
-        print(temp_vocab_sorted)
+        print(temp_vocab_sorted)  
+
+
+        
+        
+        
+        # temp_vocab_sorted = temp_vocab
+        # print(len(temp_vocab_sorted))
+        # print(temp_vocab_sorted) 
+        # now we want to begin merging until we obtain 10k merges
+        # while len(temp_vocab_sorted.keys()) > 6:
+        #     temp_vocab_sorted = {k: v for k, v in sorted(temp_vocab_sorted.items(), key=lambda item: (item[1][0], item[0][0], item[0][1]), reverse=True)}
+
+        #     # get the highest count pair
+        #     most_freq_pair = next(iter(temp_vocab_sorted))
+
+        #     # Convert first element to bytes if it's an integer
+        #     part1 = bytes([most_freq_pair[0]]) if isinstance(most_freq_pair[0], int) else most_freq_pair[0]
+        #     # Convert second element to bytes if it's an integer
+        #     part2 = bytes([most_freq_pair[1]]) if isinstance(most_freq_pair[1], int) else most_freq_pair[1]
+        #     print('Current Vocabulary')
+        #     for k, v in temp_vocab_sorted.items():
+        #         p1 = bytes([k[0]]) if isinstance(k[0], int) else k[0]
+        #         p2 = bytes([k[1]]) if isinstance(k[1], int) else k[1]
+        #         print(f'Pair: {p1}  {p2} count = {v[0]} nei = {v[1]}')
+        #     print(f'Merging pair: {part1}  {part2} count = {temp_vocab_sorted[most_freq_pair][0]}')
+
+        #     merged_token = part1 + part2
+        #     print(f'New merged token: {merged_token}')
+
+        #     # put this in the merges list
+        #     self.merges.append(most_freq_pair)
+
+        #     # iterate through this pair's neighbors and update the tokens
+        #     neighbors = temp_vocab_sorted[most_freq_pair][1]
+        #     for before, after, local_cnt in neighbors:
+        #         curr_cnt = temp_vocab_sorted[most_freq_pair][0]
+        #         # update the keys of before and after token tuples
+        #         if before is not None:
+        #             before_pair = (before, most_freq_pair[0])
+        #             new_before_pair = (before, merged_token)
+        #             if before_pair in temp_vocab_sorted:
+        #                 before_cnt = temp_vocab_sorted[before_pair][0]
+        #                 if local_cnt >= before_cnt:
+        #                     temp_vocab_sorted[new_before_pair] = temp_vocab_sorted.pop(before_pair)
+        #                 else:
+        #                     temp_vocab_sorted[before_pair][0] -= local_cnt
+        #                     temp_vocab_sorted[new_before_pair] = 
+
+        #                 # after updating the key, we need to update the neighbors list
+        #                 updated_neighbors = []
+        #                 for n_before, n_after in temp_vocab_sorted[new_before_pair][1]:
+        #                     if n_after == most_freq_pair[1]:
+        #                         updated_neighbors.append((n_before, after))
+        #                     else:
+        #                         updated_neighbors.append((n_before, n_after))
+                
+        #         if after is not None:
+        #             after_pair = (most_freq_pair[1], after)
+        #             new_after_pair = (merged_token, after)
+        #             if after_pair in temp_vocab_sorted:
+        #                 temp_vocab_sorted[new_after_pair] = temp_vocab_sorted.pop(after_pair)
+        #                 # after updating the key, we need to update the neighbors list
+        #                 updated_neighbors = []
+        #                 for n_before, n_after in temp_vocab_sorted[new_after_pair][1]:
+        #                     if n_before == most_freq_pair[0]:
+        #                         updated_neighbors.append((before, n_after))
+        #                     else:
+        #                         updated_neighbors.append((n_before, n_after))
+            
+        #     # finally, remove the most frequent pair from the vocab
+        #     temp_vocab_sorted.pop(most_freq_pair)
+        # print('Final Vocabulary After Merging')
+        # print(len(temp_vocab_sorted))
+        # print(temp_vocab_sorted)
+        # print(self.merges)
 
     def bpe_tokenizer(
         self,
