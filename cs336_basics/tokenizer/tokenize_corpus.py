@@ -2,6 +2,7 @@ import os
 import regex as re
 import heapq
 import time
+import datetime
 from typing import BinaryIO
 from collections import defaultdict
 
@@ -392,9 +393,18 @@ class Tokenizer:
         print(f"  Vocabulary size: {len(self.final_vocab)}")
         print(f"  Number of merges: {len(self.merges)}")
         print(f"{'='*60}\n")
+
+        # log above information by creating a new file in logs directory and add current datetime in filename
+        with open(f'cs336_basics/logs/bpe_tokenization_summary_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.txt', 'w') as f:
+            f.write(f"BPE Tokenization Summary:\n")
+            f.write(f"  Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)\n")
+            f.write(f"  Pre-tokenization time: {pretok_time:.2f} seconds ({pretok_time/total_time*100:.1f}%)\n")
+            f.write(f"  BPE merging time: {total_time - pretok_time:.2f} seconds ({(total_time - pretok_time)/total_time*100:.1f}%)\n")
+            f.write(f"  Vocabulary size: {len(self.final_vocab)}\n")
+            f.write(f"  Number of merges: {len(self.merges)}\n")
         
         return (self.final_vocab, self.merges)
 
-if __name__ == "__main__":
-    bpe_tokenizer = Tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 2000, ["<|endoftext|>"])
-    final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
+# if __name__ == "__main__":
+#     bpe_tokenizer = Tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 2000, ["<|endoftext|>"])
+#     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
