@@ -1,6 +1,7 @@
 import os
 import regex as re
 import heapq
+import time
 from typing import BinaryIO
 from collections import defaultdict
 
@@ -188,6 +189,9 @@ class Tokenizer:
         # Calculate target number of merges
         target_merges = self.vocab_size - init_vocab_size  # We start with 256 base tokens and all special tokens
         
+        # Start timing for BPE merging
+        merge_start_time = time.time()
+        
         # Perform merges with incremental updates
         for merge_iter in range(target_merges):
             # Get most frequent pair from heap (O(log P))
@@ -305,7 +309,11 @@ class Tokenizer:
         
         # Store final vocabulary and merges
         self.final_vocab = vocab
-        print(f'Completed {len(self.merges)} merges')
+        merge_end_time = time.time()
+        merge_time = merge_end_time - merge_start_time
+        
+        print(f'Completed {len(self.merges)} merges in {merge_time:.2f} seconds')
+        print(f'Average time per merge: {merge_time / max(len(self.merges), 1):.4f} seconds')
         # now we print all merges in format (token1, token2)
         # for i, (t1, t2) in enumerate(self.merges):
         #     print(f'Merge {i+1}: ({t1}, {t2})')
@@ -326,24 +334,40 @@ class Tokenizer:
                 vocab: dict mapping token_id -> bytes
                 merges: list of (token1, token2) tuples in merge order
         """
+        # Start total timing
+        total_start_time = time.time()
+        
         # Reset state
         self.tokens = defaultdict(lambda: (0, 0))
         self.merges = []
         self.final_vocab = {}
         
+        # Start timing for pre-tokenization
+        pretok_start_time = time.time()
+        
         ## Open file for chunking
         with open(self.input_path, "rb") as f:
             num_processes = 4
             boundaries = self.find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+            
+            print(f"Found {len(boundaries)-1} chunks to process")
 
             # The following is a serial implementation, but you can parallelize this
             # by sending each start/end pair to a set of processes.
             for j, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]), 1):
                 f.seek(start)
                 chunk = f.read(end - start).decode("utf-8", errors="ignore")
-                print(f"Processing chunk {j}/{len(boundaries)-1}") if j % 10 == 0 else None
+                if j % 10 == 0:
+                    print(f"Processing chunk {j}/{len(boundaries)-1}")
                 # Run pre-tokenization on your chunk and store the counts for each pre-token
                 self.pretok_regex(chunk)
+        
+        pretok_end_time = time.time()
+        pretok_time = pretok_end_time - pretok_start_time
+        print(f"\n{'='*60}")
+        print(f"Pre-tokenization completed in {pretok_time:.2f} seconds")
+        print(f"Total unique pre-tokens: {len(self.tokens)}")
+        print(f"{'='*60}\n")
         
         # Now perform BPE merging
         self.split_tok()
@@ -356,8 +380,21 @@ class Tokenizer:
                 max_id = max(self.final_vocab.keys()) if self.final_vocab else 255
                 self.final_vocab[max_id + 1] = special_bytes
         
+        # Calculate total time
+        total_end_time = time.time()
+        total_time = total_end_time - total_start_time
+        
+        print(f"\n{'='*60}")
+        print(f"BPE Tokenization Summary:")
+        print(f"  Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
+        print(f"  Pre-tokenization time: {pretok_time:.2f} seconds ({pretok_time/total_time*100:.1f}%)")
+        print(f"  BPE merging time: {total_time - pretok_time:.2f} seconds ({(total_time - pretok_time)/total_time*100:.1f}%)")
+        print(f"  Vocabulary size: {len(self.final_vocab)}")
+        print(f"  Number of merges: {len(self.merges)}")
+        print(f"{'='*60}\n")
+        
         return (self.final_vocab, self.merges)
 
-# if __name__ == "__main__":
-#     bpe_tokenizer = Tokenizer("path/to/corpus.txt")
-#     final_vocab, merges = bpe_tokenizer.bpe_tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 10000, ["<|endoftext|>"])
+if __name__ == "__main__":
+    bpe_tokenizer = Tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 2000, ["<|endoftext|>"])
+    final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
