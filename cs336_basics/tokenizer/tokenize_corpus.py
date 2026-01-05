@@ -204,7 +204,7 @@ class Tokenizer:
                     break
             else:
                 break  # No valid pairs left
-            print(f'Merge {merge_iter + 1}: Merging pair {most_freq_pair} with count {pair_counts[most_freq_pair]}')
+            # print(f'Merge {merge_iter + 1}: Merging pair {most_freq_pair} with count {pair_counts[most_freq_pair]}')
             # Get the byte representations of the pair
             part1_id, part2_id = most_freq_pair
             part1_bytes = vocab[part1_id]
@@ -364,4 +364,4 @@ class Tokenizer:
 
 if __name__ == "__main__":
     bpe_tokenizer = Tokenizer("path/to/corpus.txt")
-    resp = bpe_tokenizer.bpe_tokenizer('data/TinyStoriesMini.txt', 10000, ["<|endoftext|>"])
+    final_vocab, merges = bpe_tokenizer.bpe_tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 10000, ["<|endoftext|>"])
