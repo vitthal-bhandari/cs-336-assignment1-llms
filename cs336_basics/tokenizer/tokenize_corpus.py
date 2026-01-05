@@ -24,8 +24,10 @@ class ReverseBytes:
         return f"ReverseBytes({self.bytes_obj})"
 
 class Tokenizer:
-    def __init__(self, corpus):
-        self.corpus = corpus
+    def __init__(self, input_path, vocab_size, special_tokens):
+        self.input_path = input_path
+        self.vocab_size = vocab_size
+        self.special_tokens = special_tokens
         
         def default_tok_value():
             return (0, 0)
@@ -85,10 +87,9 @@ class Tokenizer:
     def pretok_regex(
         self, 
         text: str, 
-        special_tokens: list[str]
     ) -> list[str]:
         # Split documents based on special tokens
-        docs=re.split("|".join([re.escape(sp_token) for sp_token in special_tokens]), text)
+        docs=re.split("|".join([re.escape(sp_token) for sp_token in self.special_tokens]), text)
         # Define regex pattern for pre-tokenization
         PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -111,8 +112,6 @@ class Tokenizer:
 
     def split_tok(
         self,
-        vocab_size: int = 10000,
-        special_tokens: list[str] = []
     ) -> None:
         """
         Optimized BPE algorithm with incremental pair count updates.
@@ -136,7 +135,7 @@ class Tokenizer:
         # Start with 256 base tokens (all bytes)
         vocab = {i: bytes([i]) for i in range(256)}
         next_token_id = 256
-        for special_token in special_tokens:
+        for special_token in self.special_tokens:
             special_bytes = special_token.encode("utf-8")
             if special_bytes not in vocab.values():
                 vocab[next_token_id] = special_bytes
@@ -187,7 +186,7 @@ class Tokenizer:
         # print(pair_heap)
         
         # Calculate target number of merges
-        target_merges = vocab_size - init_vocab_size  # We start with 256 base tokens and all special tokens
+        target_merges = self.vocab_size - init_vocab_size  # We start with 256 base tokens and all special tokens
         
         # Perform merges with incremental updates
         for merge_iter in range(target_merges):
@@ -318,9 +317,6 @@ class Tokenizer:
 
     def bpe_tokenizer(
         self,
-        input_path: str,
-        vocab_size: int,
-        special_tokens: list[str],
     ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
         """
         Train BPE tokenizer on the input corpus.
@@ -336,7 +332,7 @@ class Tokenizer:
         self.final_vocab = {}
         
         ## Open file for chunking
-        with open(input_path, "rb") as f:
+        with open(self.input_path, "rb") as f:
             num_processes = 4
             boundaries = self.find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -347,21 +343,21 @@ class Tokenizer:
                 chunk = f.read(end - start).decode("utf-8", errors="ignore")
                 print(f"Processing chunk {j}/{len(boundaries)-1}") if j % 10 == 0 else None
                 # Run pre-tokenization on your chunk and store the counts for each pre-token
-                self.pretok_regex(chunk, special_tokens)
+                self.pretok_regex(chunk)
         
         # Now perform BPE merging
-        self.split_tok(vocab_size, special_tokens)
+        self.split_tok()
         
         # Add special tokens to vocabulary if not already present
-        for special_token in special_tokens:
+        for special_token in self.special_tokens:
             special_bytes = special_token.encode("utf-8")
             if special_bytes not in self.final_vocab.values():
                 # Find next available token ID
                 max_id = max(self.final_vocab.keys()) if self.final_vocab else 255
                 self.final_vocab[max_id + 1] = special_bytes
         
-        return self.final_vocab, self.merges
+        return (self.final_vocab, self.merges)
 
-if __name__ == "__main__":
-    bpe_tokenizer = Tokenizer("path/to/corpus.txt")
-    final_vocab, merges = bpe_tokenizer.bpe_tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 10000, ["<|endoftext|>"])
+# if __name__ == "__main__":
+#     bpe_tokenizer = Tokenizer("path/to/corpus.txt")
+#     final_vocab, merges = bpe_tokenizer.bpe_tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 10000, ["<|endoftext|>"])
