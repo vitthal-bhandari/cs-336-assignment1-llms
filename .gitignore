@@ -1,5 +1,7 @@
 # Don't commit data files
 data/
+logs/
+.DS_Store
 
 # Don't commit randomly generated files
 *BPE_*

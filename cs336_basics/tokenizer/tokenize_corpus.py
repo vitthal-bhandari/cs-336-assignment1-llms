@@ -3,9 +3,10 @@ import regex as re
 import heapq
 import time
 import datetime
+import json
+import base64
 from typing import BinaryIO
 from collections import defaultdict
-
 
 class ReverseBytes:
     """
@@ -30,6 +31,12 @@ class Tokenizer:
         self.input_path = input_path
         self.vocab_size = vocab_size
         self.special_tokens = special_tokens
+
+        # Create logs directory if it doesn't exist
+        os.makedirs('cs336_basics/logs', exist_ok=True)
+        
+        # Get timestamp for filenames
+        self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         def default_tok_value():
             return (0, 0)
@@ -137,7 +144,10 @@ class Tokenizer:
         # Start with 256 base tokens (all bytes)
         vocab = {i: bytes([i]) for i in range(256)}
         next_token_id = 256
-        for special_token in self.special_tokens:
+        # Add special tokens into the vocabulary as atomic tokens.
+        # NOTE: self.vocab_size is interpreted as the FINAL vocabulary size cap,
+        # so these special tokens consume part of the budget.
+        for special_token in dict.fromkeys(self.special_tokens):
             special_bytes = special_token.encode("utf-8")
             if special_bytes not in vocab.values():
                 vocab[next_token_id] = special_bytes
@@ -171,50 +181,80 @@ class Tokenizer:
         # print(pair_to_words)
         # print('word_tokens\n')
         # print(word_tokens)
-        
-        # Build priority queue: (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair) for max heap
-        # Negative count because heapq is a min-heap
-        # Tie-breaking: lexicographically LARGEST by byte values (not token IDs!)
-        # ReverseBytes reverses comparison so largest comes first in min-heap
-        pair_heap = []
-        for pair, count in pair_counts.items():
-            # Get actual byte representations for tie-breaking
-            bytes1 = vocab[pair[0]]
-            bytes2 = vocab[pair[1]]
-            # Use negative count for max heap, then ReverseBytes for lexicographic tie-breaking (largest first)
-            heapq.heappush(pair_heap, (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair))
-        print(f'Initial heap size: {len(pair_heap)}')
-        # print('Initial pair_heap\n')
-        # print(pair_heap)
-        
-        # Calculate target number of merges
-        target_merges = self.vocab_size - init_vocab_size  # We start with 256 base tokens and all special tokens
+
+        # Calculate target number of merges.
+        # If vocab_size=500, the final vocab will have at most 500 entries total, including:
+        # - 256 byte tokens
+        # - all special tokens added above
+        # - learned BPE merges
+        if self.vocab_size < init_vocab_size:
+            raise ValueError(
+                f"vocab_size={self.vocab_size} is smaller than the initial vocabulary "
+                f"size={init_vocab_size} (256 byte tokens + {init_vocab_size - 256} special tokens)."
+            )
+        target_merges = max(0, self.vocab_size - init_vocab_size)
         
         # Start timing for BPE merging
         merge_start_time = time.time()
+
+        # NOTE: this file is a debugging log. We truncate it each run so repeated executions
+        # don't append multiple runs and create confusing diffs vs the reference output.
+        merges_path = f'cs336_basics/logs/merges_{self.timestamp}.txt'
+        os.makedirs(os.path.dirname(merges_path), exist_ok=True)
+        with open(merges_path, "w", encoding="utf-8") as _f:
+            _f.write("")
         
         # Perform merges with incremental updates
         for merge_iter in range(target_merges):
-            # Get most frequent pair from heap (O(log P))
-            if not pair_heap:
+            if not pair_counts:
                 break  # No more pairs to merge
+        
+            # Build priority queue: (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair) for max heap
+            # Negative count because heapq is a min-heap
+            # Tie-breaking: lexicographically LARGEST by byte values (not token IDs!)
+            # ReverseBytes reverses comparison so largest comes first in min-heap
+
+            most_freq_pair = max(pair_counts.items(), key=lambda item: (item[1], vocab[item[0][0]], vocab[item[0][1]]))[0]
+            # pair_heap = []
+            # for pair, count in pair_counts.items():
+            #     # Get actual byte representations for tie-breaking
+            #     bytes1 = vocab[pair[0]]
+            #     bytes2 = vocab[pair[1]]
+            #     # Use negative count for max heap, then ReverseBytes for lexicographic tie-breaking (largest first)
+            #     heapq.heappush(pair_heap, (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair))
+            # print(f'Initial heap size: {len(pair_heap)}')
+            # # print('Initial pair_heap\n')
+            # # print(pair_heap)
             
-            # Pop pairs until we find one that still exists in pair_counts
-            # (pairs may have been removed/updated)
-            while pair_heap:
-                neg_count, _, _, pair = heapq.heappop(pair_heap)
-                if pair in pair_counts and pair_counts[pair] == -neg_count:
-                    most_freq_pair = pair
-                    break
-            else:
-                break  # No valid pairs left
-            # print(f'Merge {merge_iter + 1}: Merging pair {most_freq_pair} with count {pair_counts[most_freq_pair]}')
+            # # Get most frequent pair from heap (O(log P))
+            # if not pair_heap:
+            #     break  # No more pairs to merge
+            
+            # # Pop pairs until we find one that still exists in pair_counts
+            # # (pairs may have been removed/updated)
+            # while pair_heap:
+            #     neg_count, _, _, pair = heapq.heappop(pair_heap)
+            #     if pair in pair_counts and pair_counts[pair] == -neg_count:
+            #         most_freq_pair = pair
+            #         break
+            # else:
+            #     break  # No valid pairs left
             # Get the byte representations of the pair
             part1_id, part2_id = most_freq_pair
             part1_bytes = vocab[part1_id]
             part2_bytes = vocab[part2_id]
             merged_bytes = part1_bytes + part2_bytes
-            
+            merge_count = pair_counts[most_freq_pair]
+            # print(f'Merge {merge_iter + 1}: {part1_bytes} {part2_bytes} with count {merge_count}')
+
+            def _safe_decode(b: bytes) -> str:
+                return b.decode("utf-8", errors="replace")
+
+            write_to_file = (
+                f'Merge {merge_iter}: "{_safe_decode(part1_bytes)}" + "{_safe_decode(part2_bytes)}" = "{_safe_decode(merged_bytes)}" ({merge_count} instances)\n'
+            )
+            with open(merges_path, 'a') as f:
+                f.write(write_to_file)
             # Add merge to list
             self.merges.append((part1_bytes, part2_bytes))
             
@@ -226,87 +266,56 @@ class Tokenizer:
             # Get words that contain this pair (only these need updating)
             affected_words = pair_to_words[most_freq_pair].copy()
             
-            # Update affected words and pair counts incrementally
+            def _pair_freqs(token_ids: list[int]) -> dict[tuple[int, int], int]:
+                freqs = defaultdict(int)
+                for pi in range(len(token_ids) - 1):
+                    freqs[(token_ids[pi], token_ids[pi + 1])] += 1
+                return freqs
+
+            # Update affected words and pair counts (correctness-first: per-word diff)
             for word_idx in affected_words:
                 _, count, token_id_list = word_tokens[word_idx]
                 
-                # Find all occurrences of the pair in this word
+                # Snapshot old pairs for this word
+                old_pair_freqs = _pair_freqs(token_id_list)
+
+                # Build merged token list for this word (non-overlapping, left-to-right)
                 new_list = []
                 i = 0
                 while i < len(token_id_list):
                     if (i < len(token_id_list) - 1 and 
                         token_id_list[i] == part1_id and 
                         token_id_list[i + 1] == part2_id):
-                        # Found the pair - need to update adjacent pairs
-                        
-                        # Remove old pairs: (before, part1) and (part2, after)
-                        if i > 0:
-                            before_pair = (token_id_list[i - 1], part1_id)
-                            pair_counts[before_pair] -= count
-                            if pair_counts[before_pair] <= 0:
-                                del pair_counts[before_pair]
-                            pair_to_words[before_pair].discard(word_idx)
-                            # Re-add to heap with updated count (only if count > 0)
-                            if before_pair in pair_counts:
-                                before_bytes1 = vocab[before_pair[0]]
-                                before_bytes2 = vocab[before_pair[1]]
-                                heapq.heappush(pair_heap, (-pair_counts[before_pair], 
-                                                          ReverseBytes(before_bytes1), 
-                                                          ReverseBytes(before_bytes2), 
-                                                          before_pair))
-                        
-                        if i + 2 < len(token_id_list):
-                            after_pair = (part2_id, token_id_list[i + 2])
-                            pair_counts[after_pair] -= count
-                            if pair_counts[after_pair] <= 0:
-                                del pair_counts[after_pair]
-                            pair_to_words[after_pair].discard(word_idx)
-                            # Re-add to heap with updated count (only if count > 0)
-                            if after_pair in pair_counts:
-                                after_bytes1 = vocab[after_pair[0]]
-                                after_bytes2 = vocab[after_pair[1]]
-                                heapq.heappush(pair_heap, (-pair_counts[after_pair],
-                                                          ReverseBytes(after_bytes1), 
-                                                          ReverseBytes(after_bytes2), 
-                                                          after_pair))
-                        
-                        # Add new token
                         new_list.append(new_token_id)
-                        
-                        # Add new pairs: (before, new_token) and (new_token, after)
-                        if i > 0:
-                            new_before_pair = (token_id_list[i - 1], new_token_id)
-                            pair_counts[new_before_pair] += count
-                            pair_to_words[new_before_pair].add(word_idx)
-                            new_before_bytes1 = vocab[new_before_pair[0]]
-                            new_before_bytes2 = vocab[new_before_pair[1]]
-                            heapq.heappush(pair_heap, (-pair_counts[new_before_pair],
-                                                      ReverseBytes(new_before_bytes1), 
-                                                      ReverseBytes(new_before_bytes2), 
-                                                      new_before_pair))
-                        
-                        if i + 2 < len(token_id_list):
-                            new_after_pair = (new_token_id, token_id_list[i + 2])
-                            pair_counts[new_after_pair] += count
-                            pair_to_words[new_after_pair].add(word_idx)
-                            new_after_bytes1 = vocab[new_after_pair[0]]
-                            new_after_bytes2 = vocab[new_after_pair[1]]
-                            heapq.heappush(pair_heap, (-pair_counts[new_after_pair],
-                                                      ReverseBytes(new_after_bytes1), 
-                                                      ReverseBytes(new_after_bytes2), 
-                                                      new_after_pair))
-                        
                         i += 2
                     else:
                         new_list.append(token_id_list[i])
                         i += 1
+
+                # Snapshot new pairs for this word
+                new_pair_freqs = _pair_freqs(new_list)
+
+                # Apply delta to global pair counts (weighted by word multiplicity)
+                for pair, freq in old_pair_freqs.items():
+                    prev = pair_counts.get(pair, 0)
+                    updated = prev - (count * freq)
+                    if updated <= 0:
+                        pair_counts.pop(pair, None)
+                    else:
+                        pair_counts[pair] = updated
+
+                for pair, freq in new_pair_freqs.items():
+                    pair_counts[pair] += (count * freq)
+                    # Correctness-first: keep this as a superset (never remove word_idx),
+                    # so we don't miss future merges for a pair that still occurs elsewhere in the word.
+                    pair_to_words[pair].add(word_idx)
                 
                 # Update the word
                 word_tokens[word_idx] = (word_tokens[word_idx][0], count, new_list)
             
             # Remove the merged pair from counts and tracking
-            del pair_counts[most_freq_pair]
-            del pair_to_words[most_freq_pair]
+            pair_counts.pop(most_freq_pair, None)
+            pair_to_words.pop(most_freq_pair, None)
         
         # Store final vocabulary and merges
         self.final_vocab = vocab
@@ -357,7 +366,7 @@ class Tokenizer:
             # by sending each start/end pair to a set of processes.
             for j, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]), 1):
                 f.seek(start)
-                chunk = f.read(end - start).decode("utf-8", errors="ignore")
+                chunk = f.read(end - start).decode("utf-8", errors="replace")
                 if j % 10 == 0:
                     print(f"Processing chunk {j}/{len(boundaries)-1}")
                 # Run pre-tokenization on your chunk and store the counts for each pre-token
@@ -373,14 +382,6 @@ class Tokenizer:
         # Now perform BPE merging
         self.split_tok()
         
-        # Add special tokens to vocabulary if not already present
-        for special_token in self.special_tokens:
-            special_bytes = special_token.encode("utf-8")
-            if special_bytes not in self.final_vocab.values():
-                # Find next available token ID
-                max_id = max(self.final_vocab.keys()) if self.final_vocab else 255
-                self.final_vocab[max_id + 1] = special_bytes
-        
         # Calculate total time
         total_end_time = time.time()
         total_time = total_end_time - total_start_time
@@ -393,9 +394,10 @@ class Tokenizer:
         print(f"  Vocabulary size: {len(self.final_vocab)}")
         print(f"  Number of merges: {len(self.merges)}")
         print(f"{'='*60}\n")
-
+        
         # log above information by creating a new file in logs directory and add current datetime in filename
-        with open(f'cs336_basics/logs/bpe_tokenization_summary_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.txt', 'w') as f:
+        pathname = f'cs336_basics/logs/bpe_tokenization_summary_{self.timestamp}.txt'
+        with open(pathname, 'w') as f:
             f.write(f"BPE Tokenization Summary:\n")
             f.write(f"  Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)\n")
             f.write(f"  Pre-tokenization time: {pretok_time:.2f} seconds ({pretok_time/total_time*100:.1f}%)\n")
@@ -403,8 +405,20 @@ class Tokenizer:
             f.write(f"  Vocabulary size: {len(self.final_vocab)}\n")
             f.write(f"  Number of merges: {len(self.merges)}\n")
         
+        # Convert vocabulary to JSON-serializable format (bytes -> base64 string)
+        vocab_json = {
+            str(token_id): token_bytes.decode('utf-8', errors="replace")
+            for token_id, token_bytes in self.final_vocab.items()
+        }
+        
+        # Save the final vocabulary to a json file in logs directory
+        vocab_path = f'cs336_basics/logs/final_vocabulary_{self.timestamp}.json'
+        with open(vocab_path, 'w') as f:
+            json.dump(vocab_json, f, indent=2)
+        
+        print(f"Saved vocabulary to: {vocab_path}")
         return (self.final_vocab, self.merges)
 
 # if __name__ == "__main__":
-#     bpe_tokenizer = Tokenizer('data/TinyStoriesV2-GPT4-valid.txt', 2000, ["<|endoftext|>"])
+#     bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/TinyStoriesV2-GPT4-valid.txt', 500, ["<|endoftext|>"])
 #     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
