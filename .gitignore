@@ -1,3 +1,11 @@
+# Don't commit data files
+data/
+logs/
+.DS_Store
+
+# Don't commit randomly generated files
+*BPE_*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
