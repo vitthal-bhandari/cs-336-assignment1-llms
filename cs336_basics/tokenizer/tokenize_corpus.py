@@ -394,6 +394,14 @@ class Tokenizer:
         print(f"  Vocabulary size: {len(self.final_vocab)}")
         print(f"  Number of merges: {len(self.merges)}")
         print(f"{'='*60}\n")
+
+        # Longest token (by byte length) in the final vocabulary
+        longest_token_id, longest_token_bytes = max(
+            self.final_vocab.items(),
+            key=lambda kv: (len(kv[1]), kv[1]),
+        )
+        longest_token_len = len(longest_token_bytes)
+        longest_token_str = longest_token_bytes.decode("utf-8", errors="replace")
         
         # log above information by creating a new file in logs directory and add current datetime in filename
         pathname = f'cs336_basics/logs/bpe_tokenization_summary_{self.timestamp}.txt'
@@ -404,6 +412,9 @@ class Tokenizer:
             f.write(f"  BPE merging time: {total_time - pretok_time:.2f} seconds ({(total_time - pretok_time)/total_time*100:.1f}%)\n")
             f.write(f"  Vocabulary size: {len(self.final_vocab)}\n")
             f.write(f"  Number of merges: {len(self.merges)}\n")
+            f.write(f"  Longest token length (bytes): {longest_token_len}\n")
+            f.write(f"  Longest token id: {longest_token_id}\n")
+            f.write(f"  Longest token (utf-8, replace): {longest_token_str}\n")
         
         # Convert vocabulary to JSON-serializable format (bytes -> base64 string)
         vocab_json = {
@@ -419,6 +430,6 @@ class Tokenizer:
         print(f"Saved vocabulary to: {vocab_path}")
         return (self.final_vocab, self.merges)
 
-# if __name__ == "__main__":
-#     bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/TinyStoriesV2-GPT4-valid.txt', 500, ["<|endoftext|>"])
-#     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
+if __name__ == "__main__":
+    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
+    final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
