@@ -5,8 +5,53 @@ import time
 import datetime
 import json
 import base64
+import multiprocessing as mp
 from typing import BinaryIO
 from collections import defaultdict
+from collections import Counter
+
+# -----------------------------
+# Multiprocessing pre-tokenization helpers
+# -----------------------------
+
+_WORKER_SPLIT_RE = None
+_WORKER_PAT_RE = None
+
+
+def _init_pretok_worker(special_tokens: list[str]) -> None:
+    """Initializer for multiprocessing workers (sets up compiled regexes)."""
+    global _WORKER_SPLIT_RE, _WORKER_PAT_RE
+    # Split documents based on special tokens (same behavior as pretok_regex)
+    _WORKER_SPLIT_RE = re.compile("|".join(re.escape(t) for t in special_tokens))
+    # Same PAT as your serial pre-tokenization
+    pat = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    _WORKER_PAT_RE = re.compile(pat)
+
+
+def _pretok_count_chunk(args: tuple[str, int, int]) -> Counter:
+    """Worker: read [start,end) bytes from file, pre-tokenize, return Counter[bytes]."""
+    input_path, start, end = args
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8", errors="replace")
+
+    out: Counter = Counter()
+    # IMPORTANT for memory: don't materialize a huge `docs = split(...)` list.
+    # Instead, iterate segments between special tokens and tokenize each segment.
+    if _WORKER_SPLIT_RE is None:
+        for m in _WORKER_PAT_RE.finditer(chunk):
+            out[m.group().encode("utf-8")] += 1
+    else:
+        last = 0
+        for sm in _WORKER_SPLIT_RE.finditer(chunk):
+            segment = chunk[last:sm.start()]
+            for m in _WORKER_PAT_RE.finditer(segment):
+                out[m.group().encode("utf-8")] += 1
+            last = sm.end()
+        segment = chunk[last:]
+        for m in _WORKER_PAT_RE.finditer(segment):
+            out[m.group().encode("utf-8")] += 1
+    return out
 
 class ReverseBytes:
     """
@@ -355,22 +400,39 @@ class Tokenizer:
         # Start timing for pre-tokenization
         pretok_start_time = time.time()
         
-        ## Open file for chunking
+        # ---- Parallel pre-tokenization (multiprocessing) ----
+        # We split the file into boundaries aligned on the special token, then have each worker
+        # open the file and pre-tokenize its chunk. This avoids shipping huge strings between processes.
+        num_workers = min(4, os.cpu_count() or 4)
+        target_chunk_bytes = 16 * 1024 * 1024  # ~16MB per task (decoded string will be larger)
         with open(self.input_path, "rb") as f:
-            num_processes = 4
-            boundaries = self.find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
-            
-            print(f"Found {len(boundaries)-1} chunks to process")
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            f.seek(0)
+            desired_num_chunks = max(num_workers, int(file_size // target_chunk_bytes) + 1)
+            desired_num_chunks = min(desired_num_chunks, 256)
+            boundaries = self.find_chunk_boundaries(f, desired_num_chunks, b"<|endoftext|>")
 
-            # The following is a serial implementation, but you can parallelize this
-            # by sending each start/end pair to a set of processes.
-            for j, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]), 1):
-                f.seek(start)
-                chunk = f.read(end - start).decode("utf-8", errors="replace")
-                if j % 10 == 0:
-                    print(f"Processing chunk {j}/{len(boundaries)-1}")
-                # Run pre-tokenization on your chunk and store the counts for each pre-token
-                self.pretok_regex(chunk)
+        print(f"Found {len(boundaries)-1} chunks to process using {num_workers} processes")
+        tasks = [(self.input_path, start, end) for start, end in zip(boundaries[:-1], boundaries[1:])]
+
+        ctx = mp.get_context("spawn")
+        with ctx.Pool(
+            processes=num_workers,
+            initializer=_init_pretok_worker,
+            initargs=(list(self.special_tokens),),
+            maxtasksperchild=1,
+        ) as pool:
+            for j, counter in enumerate(pool.imap_unordered(_pretok_count_chunk, tasks, chunksize=1), 1):
+                # Merge counts into self.tokens (keeps your (count, index) structure)
+                for tok_bytes, c in counter.items():
+                    if tok_bytes not in self.tokens:
+                        self.tokens[tok_bytes] = (c, len(self.tokens))
+                    else:
+                        old_count, old_idx = self.tokens[tok_bytes]
+                        self.tokens[tok_bytes] = (old_count + c, old_idx)
+                if j % 10 == 0 or j == len(tasks):
+                    print(f"Processed chunks: {j}/{len(tasks)} | unique pre-tokens: {len(self.tokens)}")
         
         pretok_end_time = time.time()
         pretok_time = pretok_end_time - pretok_start_time
