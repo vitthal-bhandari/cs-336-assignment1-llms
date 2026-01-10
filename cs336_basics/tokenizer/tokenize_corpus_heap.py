@@ -272,19 +272,41 @@ class Tokenizer:
             if not pair_counts:
                 break  # No more pairs to merge
 
+            # Heap compaction: with lazy invalidation, stale entries accumulate.
+            # When the heap gets much larger than the number of live pairs, popping can become very slow.
+            # Periodically rebuild the heap from current pair_counts to bound staleness.
+            if merge_iter > 0 and (merge_iter % 200 == 0) and (len(pair_heap) > 6 * len(pair_counts) + 100_000):
+                pair_heap = []
+                for pair, count in pair_counts.items():
+                    heapq.heappush(
+                        pair_heap,
+                        (-count, ReverseBytes(vocab[pair[0]]), ReverseBytes(vocab[pair[1]]), pair),
+                    )
+
             # # Get most frequent pair from heap (O(log P))
             if not pair_heap:
                 break  # No more pairs to merge
             
             # Pop pairs until we find one that still exists in pair_counts
             # (pairs may have been removed/updated)
+            stale_pops = 0
             while pair_heap:
                 neg_count, _, _, pair = heapq.heappop(pair_heap)
                 if pair in pair_counts and pair_counts[pair] == -neg_count:
                     most_freq_pair = pair
                     break
+                stale_pops += 1
             else:
                 break  # No valid pairs left
+
+            # If we had to discard a huge number of stale entries, compact immediately.
+            if stale_pops > 50_000 and len(pair_counts) > 0:
+                pair_heap = []
+                for pair, count in pair_counts.items():
+                    heapq.heappush(
+                        pair_heap,
+                        (-count, ReverseBytes(vocab[pair[0]]), ReverseBytes(vocab[pair[1]]), pair),
+                    )
             # Get the byte representations of the pair
             part1_id, part2_id = most_freq_pair
             part1_bytes = vocab[part1_id]

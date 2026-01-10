@@ -493,5 +493,5 @@ class Tokenizer:
         return (self.final_vocab, self.merges)
 
 if __name__ == "__main__":
-    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
+    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/TinyStoriesV2-GPT4-train.txt', 10000, ["<|endoftext|>"])
     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
