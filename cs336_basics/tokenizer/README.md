@@ -1,6 +1,6 @@
 # Experiments with building a BPE Tokenizer
 
-I implemented a subset of Assignment 1 from Stanford's CS 336 (Language Modeling from Scratch) involving Byte-Pair Encoding (BPE) tokenization. I expected a “cute algorithm + a couple unit tests.” What I got was a surprisingly real systems problem: data structures, CPU caches, file I/O, and a lot of “why is this slower?” moments.
+I implemented a subset of Assignment 1 from Stanford's CS 336 (Language Modeling from Scratch) involving Byte-Pair Encoding (BPE) tokenization. I expected a "cute algorithm + a couple unit tests." What I got was a surprisingly real systems problem: data structures, CPU caches, file I/O, and a lot of "why is this slower?" moments.
 
 
 ## Tokenization, BPE, and the Basic Algorithm
@@ -20,20 +20,16 @@ The naïve implementation of BPE is actually quite simple if you think about it.
 
 ![BPE Algorithm](../../assets/images/bpe_merging_img.png)
 
-Simple, right? Well not quite so simple. It took me a couple of days to successfully pass all the 
-test cases on my algorithm. I immediately tried jumping to the most "optimal" 
-solution (thanks to years of leetcoding) and could not have guessed that the 
-actual solution would end up involving a complex mix of data structures, 
-optimization techniques, parallelization, and File I/O computer architecture 
-internals. Phew!The catch is that “count all adjacent pairs, then update everything” becomes brutal once your dataset is gigabytes and your vocab target is 32k.
+Simple, right? Well not quite so simple. It took me a couple of days to successfully pass all the 
+test cases on my algorithm. I immediately tried jumping to the most “optimal” solution (thanks to years of leetcoding) and could not have guessed that the actual solution would end up involving a complex mix of data structures, optimization techniques, parallelization, and File I/O computer architecture internals. Phew!The catch is that “count all adjacent pairs, then update everything” becomes brutal once your dataset is gigabytes and your vocab target is 32K.
 
 ## Experimental Setup
 - **Device**: Apple M3 MacBook Air, 16GB RAM
 - **Datasets (size + doc delimiter counts)**:
-  - TinyStories Val: **22.5MB**, **27,630** occurrences of `<|endoftext|>`
-  - TinyStories Train: **2.23GB**, **2,717,699** occurrences of `<|endoftext|>`
-  - OWT Val: **290MB**, **59,059** occurrences of `<|endoftext|>`
-  - OWT Train: **11.92GB**, **2,399,397** occurrences of `<|endoftext|>`
+  - TinyStories Val: **22.5MB** - **27,630** occurrences of `<|endoftext|>`
+  - TinyStories Train: **2.23GB** - **2,717,699** occurrences of `<|endoftext|>`
+  - OWT Val: **290MB** - **59,059** occurrences of `<|endoftext|>`
+  - OWT Train: **11.92GB** - **2,399,397** occurrences of `<|endoftext|>`
 - **Vocab sizes**:
   - 500 (TinyStories Val)
   - 10,000 (TinyStories Train)
@@ -44,12 +40,10 @@ internals. Phew!The catch is that “count all adjacent pairs, then update ever
 ### What counts as “# merges” in my logs?
 I start from:
 - 256 base byte tokens
-- + special tokens (e.g. `<|endoftext|>`)
+- \+ special tokens (e.g. `<|endoftext|>`)
 
 Then I run:
-\[
-\text{merges} = \text{vocab\_size} - (\text{256 + \#specials})
-\]
+`merges* = vocab\_size - (256 + \#specials)`
 
 That’s why:
 - vocab_size=500 → merges=243 (with 1 special token)
@@ -58,27 +52,27 @@ That’s why:
 
 ## Implementation Journey (What Actually Mattered)
 
-### 1) Correctness First: the “off-by-a-few counts” bug
+### 1) Correctness First: the "off-by-a-few counts" bug
 BPE correctness is fragile: if your pair counts drift even slightly, the merge order changes and unit tests explode.
 
-The bug pattern I hit was classic: **repeated pairs inside a token sequence** (e.g., `A B A B`). Naively updating “before/after” counts per occurrence can double-subtract or miss boundary pairs.
+The bug pattern I hit was something simple, yet an edge case I completely missed: **repeated pairs inside a token sequence** (e.g., `A B A B A B`). Naively updating "before/after" counts per occurrence can double-subtract or miss boundary pairs.
 
-My fix: compute the *before/after* adjacent-pair multiset per affected word, then apply a diff to `pair_counts` (`pair_counts` is a dictionary with token pairs as keys and their frequency in the corpus as values). It’s more expensive than a purely local update, but it’s very hard to get wrong. That got me past the unit tests and gave stable merges on TinyStories Val (243 merges) and beyond.
+💡 ***My fix***: compute the *before/after* adjacent-pair multiset per affected word, then apply a diff to `pair_counts` (`pair_counts` is a dictionary with token pairs as keys and their frequency in the corpus as values). It’s more expensive than a purely local update, but it’s very hard to get wrong. That got me past the unit tests and gave stable merges on TinyStories Val (243 merges) and beyond.
 
-Nerd note: if you want both correctness *and* speed at scale, the next step is to track **pair occurrences** (positions), and update only local neighborhoods around each merge (no full rescans of the word). This is quite doable and I am thinking of using Cursor for a quick reimplementation. Will update.
+✨ Nerd note: if you want both correctness *and* speed at scale, the next step is to track **pair occurrences** (positions), and update only local neighborhoods around each merge (no full rescans of the word). This is quite doable and I am thinking of using Cursor for a quick reimplementation. Will update here.
 
 ### 2) Max-pair selection: O(N) scan vs heap (and why "O(log N)" can lie)
-I tried two strategies for selecting the most frequent pair each iteration:
+I tried two strategies for selecting the most frequent pair in each iteration:
 - **O(N) scan** of `pair_counts` to find argmax. (I use the max() function in Python to perform a linear scan and choose the pair with maximum frequency)
 - **Min-heap + lazy invalidation** (I used Python 3.11 and max-heap is only introduced in Python 3.14)
 
-Honestly speaking, when I saw the problem at hand - I have to iteratively select the maximum-frequent token pair from the corpus - I thought using a max-heap was the obvious choice. the heap invariant keeps the maximally frequent element on top. It can be accessed in O(1) time, popped in O(1) time, and new new frequencies can be pushed with O(logN) complexity where N is the average heap size.
+Honestly speaking, when I saw the problem at hand - I have to iteratively select the maximum-frequent token pair from the corpus - I thought using a max-heap was the obvious choice. the heap invariant keeps the maximally frequent element on top. It can be accessed in O(1) time, popped in O(1) time, and any new frequencies can be pushed with O(logN) complexity where N is the average heap size.
 
 The improvement works! (and then it doesn't). For the tiny stories datasets and validation split of OWT, using a heap brings noticeable improvements in merging time. However this behavior doesn't extend to the (much larger) training set of the OWT split.
 
 ![Algorithmic time improvement across datasets](../../assets/images/algorithmic_improvement_graph.png)
 
-There's a problem here!
+❗️ There's a problem here ❗️
 
 When I merge the maximally frequent tokens, I need to update all their occurences. Thus the pair counts of some existing pairs might have to be decremented. This is handled by the `pair_counts` dictionary. However, the stale entries of such pair counts in the heap persist and cannot be popped feasibly. Yikes!
 
@@ -98,11 +92,11 @@ The run logs show both sides of the story:
 - **TinyStories Train (10k vocab)**:
   - O(N) scan → total **219.54s**, merge **31.92s**
   - heap → total **189.35s**, merge **2.87s**
-  - (heap was a clear win here)
+  - (heap was a clear win here) ✅
 - **OWT Train (32k vocab)**:
   - O(N) scan → total **11588.80s**, merge **11306.64s**
   - heap `20260109_162315` → total **21018.43s**, merge **20672.69s**
-  - (heap got *worse* due to stale-entry churn)
+  - (heap got *worse* due to stale-entry churn) ❌
 
 Translation: "O(log N)" is real for *argmax extraction*, but your actual runtime is dominated by how much you mutate counts + how much garbage the heap accumulates.
 
@@ -153,7 +147,7 @@ I learned that a good representation of total tokenization time should be an ave
 ## Results (Numbers)
 Below are the headline results from multiple experimental runs.
 
-![Multiprocessing effect on total time](../../assets/images/multiprocessing_graph.png)
+![Multiprocessing effect on total time](../../assets/images/merge_time_graph.png)
 
 ### TinyStories Val (22.5MB, 500 vocab, 243 merges)
 Without multiprocessing:
@@ -190,8 +184,8 @@ Takeaway: on OWT Val, heap wins massively (merge time drops from ~2k seconds to 
 
 ### OWT Train (11.92GB, 32k vocab, 31,743 merges)
 With multiprocessing:
-- O(N) scan: `20260108_133945` → total **11588.80s** (pretok 282.16s, merge 11306.64s)
-- heap: `20260109_162315` → total **21018.43s** (pretok 345.74s, merge 20672.69s)
+- O(N) scan → total **11588.80s** (pretok 282.16s, merge 11306.64s)
+- heap → total **21018.43s** (pretok 345.74s, merge 20672.69s)
 
 Takeaway: this is where the “heap version should be faster” intuition died. The algorithmic story is bigger than argmax selection.
 
@@ -210,7 +204,7 @@ If you want to go full nerd, the real performance roadmap looks like:
 - maintain pair occurrences (pair → positions),
 - update only the 2-neighborhood around each merged occurrence.
 
-That’s how you get from “hours” to “minutes” on 32k merges.
+That’s how you get from "hours" to "minutes" on 32k merges.
 
 ### Bottlenecks shift with dataset size
 - Small datasets: selection strategy matters a bit; everything is fast.
@@ -219,7 +213,7 @@ That’s how you get from “hours” to “minutes” on 32k merges.
 
 ### Multiprocessing is a win (with guardrails)
 - Pre-tokenization parallelizes cleanly.
-- But “max workers” is not the goal; “max throughput without memory death” is.
+- But "max workers" is not the goal; "max throughput without memory death" is.
 
 ### Longest-token artifacts are a reality check
 On OWT, my longest learned tokens sometimes decode into weird byte soup (e.g., repeated “Ã/Ä” glyphs). That’s not necessarily a bug: BPE operates over bytes and happily merges non-UTF8-friendly sequences if they’re frequent.
@@ -233,4 +227,4 @@ If I were to take this further, the next frontier is a more advanced merging imp
 - avoid global rescans/diffs per merge 😩
 - use doubly linked lists ⬅️ ➡️
 
-Tokenization is fun. Tokenization is pain. Tokenization is real engineering.
+**Tokenization is fun. Tokenization is pain. Tokenization is real engineering.**
