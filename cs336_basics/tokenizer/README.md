@@ -4,21 +4,10 @@ I implemented a subset of Assignment 1 from Stanford's CS 336 (Language Modeling
 
 
 ## Tokenization, BPE, and the Basic Algorithm
-The lecture and assignment notes gave a great idea of why modern day subword 
-tokenizers are used in most language models - subword tokenization provides a decent 
-tradeoff between a larger vocabulary size and better compression of the input byte 
-sequence. When I first read the Byte-Pair Encoding (BPE) algorithm used by Sennrich 
-et al. (2016) and it's naïve example in the assignment notes, I was excited to try 
-and implement the algorith myself, without the help of Claude code and Cursor. This 
-is one of the benefits of being a fulltime student - you are allowed to work on 
-interesting problems with no immediate useful rewards. 
+The lecture and assignment notes gave a great idea of why modern day subword tokenizers are used in most language models - subword tokenization provides a decent tradeoff between a larger vocabulary size and better compression of the input byte sequence. When I first read the Byte-Pair Encoding (BPE) algorithm used by Sennrich et al. (2016) and it's naïve example in the assignment notes, I was excited to try and implement the algorith myself, without the help of Claude code and Cursor. 
+This is one of the benefits of being a fulltime student - you are allowed to work on interesting problems with no immediate useful rewards. 
 
-The naïve implementation of BPE is actually quite simple if you think about it. You 
-split the input corpus into pre-tokens, and then iteratively merge adjacent sets of 
-byte-level tokens, starting from the most-frequent token pair. Everytime you merge a 
-byte-level token pair, it becomes a "sub-word" token, and it replaces all individual 
-occurrences of the adjacent bytes with the merged token. The next maximally frequent 
-pair of tokens is picked up, merged, and the process repeats.
+The naïve implementation of BPE is actually quite simple if you think about it. You split the input corpus into pre-tokens, and then iteratively merge adjacent sets of byte-level tokens, starting from the most-frequent token pair. Everytime you merge a byte-level token pair, it becomes a "sub-word" token,and it replaces all individual occurrences of the adjacent bytes with the merged token. The next maximally frequent pair of tokens is picked up, merged, and the process repeats.
 
 - Start with a base vocabulary
 - Pre-tokenize the corpus
