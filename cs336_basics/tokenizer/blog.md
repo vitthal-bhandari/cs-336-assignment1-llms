@@ -17,7 +17,7 @@ split the input corpus into pre-tokens, and then iteratively merge adj
 byte-level tokens, starting from the most-frequent token pair. Everytime you merge a 
 byte-level token pair, it becomes a "sub-word" token, and it replaces all individual 
 occurrences of the adjacent bytes with the merged token. The next maximally frequent 
-pair of tokens is picked up, merged, and the process repeats. Simple, right?
+pair of tokens is picked up, merged, and the process repeats.
 
 - Start with a base vocabulary
 - Pre-tokenize the corpus
@@ -26,7 +26,9 @@ pair of tokens is picked up, merged, and the process repeats. Simple,
   - Merge the most frequent pair into a new token.
   - Update counts and repeat until you hit a target vocab size.
 
-Well not quite so simple. It took me a couple of days to successfully pass all the 
+![BPE Algorithm](../../assets/images/bpe_algorithm.png)
+
+Simple, right? Well not quite so simple. It took me a couple of days to successfully pass all the 
 test cases on my algorithm. I immediately tried jumping to the most "optimal" 
 solution (thanks to years of leetcoding) and could not have guessed that the 
 actual solution would end up involving a complex mix of data structures, 
@@ -44,6 +46,8 @@ internals. Phew!The catch is that “count all adjacent pairs, then update ever
   - 500 (TinyStories Val)
   - 10,000 (TinyStories Train)
   - 32,000 (OWT Val/Train)
+
+![Datasets Tokenized](../../assets/images/tok_perf_summary.png)
 
 ### What counts as “# merges” in my logs?
 I start from:
@@ -78,6 +82,10 @@ I tried two strategies for selecting the most frequent pair each iteration:
 
 Honestly speaking, when I saw the problem at hand - I have to iteratively select the maximum-frequent token pair from the corpus - I thought using a max-heap was the obvious choice. the heap invariant keeps the maximally frequent element on top. It can be accessed in O(1) time, popped in O(1) time, and new new frequencies can be pushed with O(logN) complexity where N is the average heap size.
 
+The improvement works! (and then it doesn't). For the tiny stories datasets and validation split of OWT, using a heap brings noticeable improvements in merging time. However this behavior doesn't extend to the (much larger) training set of the OWT split.
+
+![Algorithmic time improvement across datasets](../../assets/images/algorithmic_improvement_graph.png)
+
 There's a problem here!
 
 When I merge the maximally frequent tokens, I need to update all their occurences. Thus the pair counts of some existing pairs might have to be decremented. This is handled by the `pair_counts` dictionary. However, the stale entries of such pair counts in the heap persist and cannot be popped feasibly. Yikes!
@@ -96,18 +104,20 @@ The heap looks like an asymptotic win, but there’s a systems caveat:
 
 The run logs show both sides of the story:
 - **TinyStories Train (10k vocab)**:
-  - O(N) scan, no MP: `20260107_213604` → total **219.54s**, merge **31.92s**
-  - heap, no MP: `20260107_212055` → total **189.35s**, merge **2.87s**
+  - O(N) scan → total **219.54s**, merge **31.92s**
+  - heap → total **189.35s**, merge **2.87s**
   - (heap was a clear win here)
 - **OWT Train (32k vocab)**:
-  - O(N) scan, with MP: `20260108_133945` → total **11588.80s**, merge **11306.64s**
-  - heap, with MP: `20260109_162315` → total **21018.43s**, merge **20672.69s**
+  - O(N) scan → total **11588.80s**, merge **11306.64s**
+  - heap `20260109_162315` → total **21018.43s**, merge **20672.69s**
   - (heap got *worse* due to stale-entry churn)
 
-Translation: “O(log N)” is real for *argmax extraction*, but your actual runtime is dominated by how much you mutate counts + how much garbage the heap accumulates.
+Translation: "O(log N)" is real for *argmax extraction*, but your actual runtime is dominated by how much you mutate counts + how much garbage the heap accumulates.
 
 ### 3) Parallelization: pre-tokenization is embarrassingly parallel; merging is not
 Pre-tokenization is easy to parallelize because chunks can be processed independently. BPE merging is fundamentally sequential because merge \(t+1\) depends on the exact state after merge \(t\).
+
+![Multiprocessing effect on total time](../../assets/images/multiprocessing_graph.png)
 
 I parallelized pre-tokenization with `multiprocessing`:
 - Split the file into **chunk boundaries aligned on `<|endoftext|>`** (avoid cross-document merges).
@@ -125,64 +135,64 @@ The fix was “boring but effective”:
 - avoid materializing `split()` lists in memory,
 - recycle workers (`maxtasksperchild=1`).
 
-Concrete pre-tokenization wins from the PDF:
+Concrete pre-tokenization wins experimental runs:
 - TinyStories Train, O(N):
-  - no MP: `20260107_213604` → pretok **187.61s**
-  - with MP: `20260108_234056` → pretok **54.38s**
+  - no MP → pretok **187.61s**
+  - with MP → pretok **54.38s**
 - TinyStories Train, heap:
-  - no MP: `20260107_212055` → pretok **186.48s**
-  - with MP: `20260108_234358` → pretok **55.20s**
+  - no MP → pretok **186.48s**
+  - with MP → pretok **55.20s**
 
-Same pretokenization code, ~3.4× faster. That’s multiprocessing doing its job.
+**Same pretokenization code, ~3.4× faster**. That’s multiprocessing doing its job.
 
 ### 4) File caching is real (and it will gaslight your benchmarks)
-I saw runs where “identical” pre-tokenization code was 2× faster on the second attempt.
+I saw runs where "identical" pre-tokenization code was 2× faster on the second attempt.
 The reason was not magic — just OS page cache + CPU scheduling + thermals. Benchmarking on laptops requires discipline:
 - alternate run order,
 - discard the first warm run,
 - pin your settings as much as possible.
 
-You can see this effect in the OWT Val O(N) runs:
-- `20260108_172005`: total **1983.55s**
-- `20260108_180116`: total **2315.59s**
+You can see this effect in the OWT Val O(N) runs which had a runtime randomly varying between 33 and 38 minutes.
 
 Same dataset and method; different run time. Your laptop is a noisy lab instrument.
 
 I learned that a good representation of total tokenization time should be an average across 3-5 runs, excluding the first run. For all my experiments, I averaged the time taken for 3 runs after excluding the first cold run. 
 
 ## Results (Numbers)
-Below are the headline results from multiple experimental runs. I’m listing the exact run IDs so you can cross-check in [BPE Tokenization-Summary.pdf](file:///Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/cs336_basics/logs/BPE%20Tokenization-Summary.pdf).
+Below are the headline results from multiple experimental runs.
+
+![Multiprocessing effect on total time](../../assets/images/multiprocessing_graph.png)
 
 ### TinyStories Val (22.5MB, 500 vocab, 243 merges)
 Without multiprocessing:
-- O(N) scan: `20260107_173439` → total **2.01s** (pretok 1.80s, merge 0.21s)
-- heap: `20260107_205813` → total **2.00s** (pretok 1.81s, merge 0.19s)
+- O(N) scan` → total **2.01s** (pretok 1.80s, merge 0.21s)
+- heap → total **2.00s** (pretok 1.81s, merge 0.19s)
 
 With multiprocessing:
-- O(N) scan: `20260108_233744` → total **0.74s** (pretok 0.52s, merge 0.22s)
-- heap: `20260108_233857` → total **0.72s** (pretok 0.52s, merge 0.20s)
+- O(N) scan → total **0.74s** (pretok 0.52s, merge 0.22s)
+- heap → total **0.72s** (pretok 0.52s, merge 0.20s)
 
-Takeaway: on tiny inputs, all optimizations are basically “meh”; overhead dominates.
+Takeaway: on tiny inputs, all optimizations are basically "meh"; overhead dominates. ***Pre-tokenization is the bottleneck***. Parallelizations helps bring down pre-tokenization time!
 
 ### TinyStories Train (2.23GB, 10k vocab, 9,743 merges)
 Without multiprocessing:
-- O(N) scan: `20260107_213604` → total **219.54s** (pretok 187.61s, merge 31.92s)
-- heap: `20260107_212055` → total **189.35s** (pretok 186.48s, merge 2.87s)
+- O(N) scan → total **219.54s** (pretok 187.61s, merge 31.92s)
+- heap → total **189.35s** (pretok 186.48s, merge 2.87s)
 
 With multiprocessing:
-- O(N) scan: `20260108_234056` → total **86.62s** (pretok 54.38s, merge 32.24s)
-- heap: `20260108_234358` → total **57.99s** (pretok 55.20s, merge 2.79s)
+- O(N) scan → total **86.62s** (pretok 54.38s, merge 32.24s)
+- heap → total **57.99s** (pretok 55.20s, merge 2.79s)
 
-Takeaway: this is the “sweet spot” where heap + MP looks god-tier.
+Takeaway: this is the “sweet spot” where heap + MP looks god-tier. ***Pre-tokenization is still the bottleneck***. Parallelizations helps bring down pre-tokenization time and heap brings down merging time!
 
 ### OWT Val (290MB, 32k vocab, 31,743 merges)
 With multiprocessing (these runs are already merge-dominated):
-- O(N) scan:
-  - `20260108_172005` → total **1983.55s** (pretok 6.70s, merge 1976.85s)
-  - `20260108_180116` → total **2315.59s** (pretok 7.48s, merge 2308.11s)
-- heap:
-  - `20260108_175735` → total **107.74s** (pretok 7.15s, merge 100.60s)
-  - `20260108_184250` → total **111.81s** (pretok 7.20s, merge 104.61s)
+- O(N) scan: two runs
+  - `run_1` → total **1983.55s** (pretok 6.70s, merge 1976.85s)
+  - `run_2` → total **2315.59s** (pretok 7.48s, merge 2308.11s)
+- heap: two runs
+  - `run_1` → total **107.74s** (pretok 7.15s, merge 100.60s)
+  - `run_2` → total **111.81s** (pretok 7.20s, merge 104.61s)
 
 Takeaway: on OWT Val, heap wins massively (merge time drops from ~2k seconds to ~100 seconds).
 
@@ -192,15 +202,6 @@ With multiprocessing:
 - heap: `20260109_162315` → total **21018.43s** (pretok 345.74s, merge 20672.69s)
 
 Takeaway: this is where the “heap version should be faster” intuition died. The algorithmic story is bigger than argmax selection.
-
-#### Total time: O(N) scan vs heap selection
-![Algorithmic time improvement across datasets](../../assets/images/algorithmic_improvement_graph.png)
-
-#### Merging time scaling vs dataset size and #merges
-![Merging time vs dataset size and merges](../../assets/images/merge_time_graph.png)
-
-#### Multiprocessing effect (pre-tokenization vs merging)
-![Multiprocessing effect on total time](../../assets/images/multiprocessing_graph.png)
 
 ## Findings (TL;DR)
 
