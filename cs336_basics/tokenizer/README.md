@@ -18,7 +18,7 @@ The naïve implementation of BPE is actually quite simple if you think about it.
   - Merge the most frequent pair into a new token.
   - Update counts and repeat until you hit a target vocab size.
 
-![BPE Algorithm](../../assets/images/bpe_algorithm.png)
+![BPE Algorithm](../../assets/images/bpe_algorithm_img.png)
 
 Simple, right? Well not quite so simple. It took me a couple of days to successfully pass all the 
 test cases on my algorithm. I immediately tried jumping to the most "optimal" 
