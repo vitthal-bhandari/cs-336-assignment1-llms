@@ -57,9 +57,9 @@ BPE correctness is fragile: if your pair counts drift even slightly, the merge o
 
 The bug pattern I hit was something simple, yet an edge case I completely missed: **repeated pairs inside a token sequence** (e.g., `A B A B A B`). Naively updating "before/after" counts per occurrence can double-subtract or miss boundary pairs.
 
-💡 ***My fix***: compute the *before/after* adjacent-pair multiset per affected word, then apply a diff to `pair_counts` (`pair_counts` is a dictionary with token pairs as keys and their frequency in the corpus as values). It’s more expensive than a purely local update, but it’s very hard to get wrong. That got me past the unit tests and gave stable merges on TinyStories Val (243 merges) and beyond.
+💡 **My fix**: compute the *before/after* adjacent-pair multiset per affected word, then apply a diff to `pair_counts` (`pair_counts` is a dictionary with token pairs as keys and their frequency in the corpus as values). It’s more expensive than a purely local update, but it’s very hard to get wrong. That got me past the unit tests and gave stable merges on TinyStories Val (243 merges) and beyond.
 
-✨ Nerd note: if you want both correctness *and* speed at scale, the next step is to track **pair occurrences** (positions), and update only local neighborhoods around each merge (no full rescans of the word). This is quite doable and I am thinking of using Cursor for a quick reimplementation. Will update here.
+✨ **Nerd note**: if you want both correctness *and* speed at scale, the next step is to track **pair occurrences** (positions), and update only local neighborhoods around each merge (no full rescans of the word). This is quite doable and I am thinking of using Cursor for a quick reimplementation. Will update here.
 
 ### 2) Max-pair selection: O(N) scan vs heap (and why "O(log N)" can lie)
 I tried two strategies for selecting the most frequent pair in each iteration:
