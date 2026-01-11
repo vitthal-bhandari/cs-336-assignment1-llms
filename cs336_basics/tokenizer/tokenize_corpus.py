@@ -21,9 +21,7 @@ _WORKER_PAT_RE = None
 def _init_pretok_worker(special_tokens: list[str]) -> None:
     """Initializer for multiprocessing workers (sets up compiled regexes)."""
     global _WORKER_SPLIT_RE, _WORKER_PAT_RE
-    # Split documents based on special tokens (same behavior as pretok_regex)
     _WORKER_SPLIT_RE = re.compile("|".join(re.escape(t) for t in special_tokens))
-    # Same PAT as your serial pre-tokenization
     pat = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     _WORKER_PAT_RE = re.compile(pat)
 
@@ -48,6 +46,7 @@ def _pretok_count_chunk(args: tuple[str, int, int]) -> Counter:
             for m in _WORKER_PAT_RE.finditer(segment):
                 out[m.group().encode("utf-8")] += 1
             last = sm.end()
+        # trailing segment
         segment = chunk[last:]
         for m in _WORKER_PAT_RE.finditer(segment):
             out[m.group().encode("utf-8")] += 1
@@ -188,14 +187,16 @@ class Tokenizer:
         # Initialize vocabulary: token_id -> bytes
         # Start with 256 base tokens (all bytes)
         vocab = {i: bytes([i]) for i in range(256)}
+        vocab_bytes_set = set(vocab.values())
         next_token_id = 256
         # Add special tokens into the vocabulary as atomic tokens.
         # NOTE: self.vocab_size is interpreted as the FINAL vocabulary size cap,
         # so these special tokens consume part of the budget.
         for special_token in dict.fromkeys(self.special_tokens):
             special_bytes = special_token.encode("utf-8")
-            if special_bytes not in vocab.values():
+            if special_bytes not in vocab_bytes_set:
                 vocab[next_token_id] = special_bytes
+                vocab_bytes_set.add(special_bytes)
                 next_token_id += 1
         init_vocab_size = next_token_id
         
@@ -249,41 +250,63 @@ class Tokenizer:
         with open(merges_path, "w", encoding="utf-8") as _f:
             _f.write("")
         
+        # Build priority queue: (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair) for max heap
+        # Negative count because heapq is a min-heap
+        # Tie-breaking: lexicographically LARGEST by byte values (not token IDs!)
+        # ReverseBytes reverses comparison so largest comes first in min-heap
+
+        most_freq_pair = () # max(pair_counts.items(), key=lambda item: (item[1], vocab[item[0][0]], vocab[item[0][1]]))[0]
+        pair_heap = []
+        for pair, count in pair_counts.items():
+            # Get actual byte representations for tie-breaking
+            bytes1 = vocab[pair[0]]
+            bytes2 = vocab[pair[1]]
+            # Use negative count for max heap, then ReverseBytes for lexicographic tie-breaking (largest first)
+            heapq.heappush(pair_heap, (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair))
+        # print(f'Initial heap size: {len(pair_heap)}')
+        # # print('Initial pair_heap\n')
+        # # print(pair_heap)
+            
         # Perform merges with incremental updates
         for merge_iter in range(target_merges):
             if not pair_counts:
                 break  # No more pairs to merge
-        
-            # Build priority queue: (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair) for max heap
-            # Negative count because heapq is a min-heap
-            # Tie-breaking: lexicographically LARGEST by byte values (not token IDs!)
-            # ReverseBytes reverses comparison so largest comes first in min-heap
 
-            most_freq_pair = max(pair_counts.items(), key=lambda item: (item[1], vocab[item[0][0]], vocab[item[0][1]]))[0]
-            # pair_heap = []
-            # for pair, count in pair_counts.items():
-            #     # Get actual byte representations for tie-breaking
-            #     bytes1 = vocab[pair[0]]
-            #     bytes2 = vocab[pair[1]]
-            #     # Use negative count for max heap, then ReverseBytes for lexicographic tie-breaking (largest first)
-            #     heapq.heappush(pair_heap, (-count, ReverseBytes(bytes1), ReverseBytes(bytes2), pair))
-            # print(f'Initial heap size: {len(pair_heap)}')
-            # # print('Initial pair_heap\n')
-            # # print(pair_heap)
-            
+            # Heap compaction: with lazy invalidation, stale entries accumulate.
+            # When the heap gets much larger than the number of live pairs, popping can become very slow.
+            # Periodically rebuild the heap from current pair_counts to bound staleness.
+            if merge_iter > 0 and (merge_iter % 200 == 0) and (len(pair_heap) > 6 * len(pair_counts) + 100_000):
+                pair_heap = []
+                for pair, count in pair_counts.items():
+                    heapq.heappush(
+                        pair_heap,
+                        (-count, ReverseBytes(vocab[pair[0]]), ReverseBytes(vocab[pair[1]]), pair),
+                    )
+
             # # Get most frequent pair from heap (O(log P))
-            # if not pair_heap:
-            #     break  # No more pairs to merge
+            if not pair_heap:
+                break  # No more pairs to merge
             
-            # # Pop pairs until we find one that still exists in pair_counts
-            # # (pairs may have been removed/updated)
-            # while pair_heap:
-            #     neg_count, _, _, pair = heapq.heappop(pair_heap)
-            #     if pair in pair_counts and pair_counts[pair] == -neg_count:
-            #         most_freq_pair = pair
-            #         break
-            # else:
-            #     break  # No valid pairs left
+            # Pop pairs until we find one that still exists in pair_counts
+            # (pairs may have been removed/updated)
+            stale_pops = 0
+            while pair_heap:
+                neg_count, _, _, pair = heapq.heappop(pair_heap)
+                if pair in pair_counts and pair_counts[pair] == -neg_count:
+                    most_freq_pair = pair
+                    break
+                stale_pops += 1
+            else:
+                break  # No valid pairs left
+
+            # If we had to discard a huge number of stale entries, compact immediately.
+            if stale_pops > 50_000 and len(pair_counts) > 0:
+                pair_heap = []
+                for pair, count in pair_counts.items():
+                    heapq.heappush(
+                        pair_heap,
+                        (-count, ReverseBytes(vocab[pair[0]]), ReverseBytes(vocab[pair[1]]), pair),
+                    )
             # Get the byte representations of the pair
             part1_id, part2_id = most_freq_pair
             part1_bytes = vocab[part1_id]
@@ -318,6 +341,9 @@ class Tokenizer:
                 return freqs
 
             # Update affected words and pair counts (correctness-first: per-word diff)
+            # Performance note: we track all pairs whose counts changed, and push each one ONCE
+            # to the heap after we've processed every affected word. Lazy invalidation handles staleness.
+            changed_pairs: set[tuple[int, int]] = set()
             for word_idx in affected_words:
                 _, count, token_id_list = word_tokens[word_idx]
                 
@@ -348,15 +374,27 @@ class Tokenizer:
                         pair_counts.pop(pair, None)
                     else:
                         pair_counts[pair] = updated
+                    changed_pairs.add(pair)
 
                 for pair, freq in new_pair_freqs.items():
                     pair_counts[pair] += (count * freq)
                     # Correctness-first: keep this as a superset (never remove word_idx),
                     # so we don't miss future merges for a pair that still occurs elsewhere in the word.
                     pair_to_words[pair].add(word_idx)
+                    changed_pairs.add(pair)
                 
                 # Update the word
                 word_tokens[word_idx] = (word_tokens[word_idx][0], count, new_list)
+
+            # Push updated priorities once per changed pair (lazy invalidation will skip stale entries).
+            for pair in changed_pairs:
+                cur = pair_counts.get(pair)
+                if cur is None:
+                    continue
+                heapq.heappush(
+                    pair_heap,
+                    (-cur, ReverseBytes(vocab[pair[0]]), ReverseBytes(vocab[pair[1]]), pair),
+                )
             
             # Remove the merged pair from counts and tracking
             pair_counts.pop(most_freq_pair, None)
@@ -401,8 +439,9 @@ class Tokenizer:
         pretok_start_time = time.time()
         
         # ---- Parallel pre-tokenization (multiprocessing) ----
-        # We split the file into boundaries aligned on the special token, then have each worker
-        # open the file and pre-tokenize its chunk. This avoids shipping huge strings between processes.
+        # Memory-safe defaults:
+        # - fewer workers (each worker holds a decoded chunk + Counter)
+        # - many smaller chunks (so no single worker holds a huge chunk string)
         num_workers = min(4, os.cpu_count() or 4)
         target_chunk_bytes = 16 * 1024 * 1024  # ~16MB per task (decoded string will be larger)
         with open(self.input_path, "rb") as f:
@@ -410,7 +449,7 @@ class Tokenizer:
             file_size = f.tell()
             f.seek(0)
             desired_num_chunks = max(num_workers, int(file_size // target_chunk_bytes) + 1)
-            desired_num_chunks = min(desired_num_chunks, 256)
+            desired_num_chunks = min(desired_num_chunks, 256)  # cap overhead
             boundaries = self.find_chunk_boundaries(f, desired_num_chunks, b"<|endoftext|>")
 
         print(f"Found {len(boundaries)-1} chunks to process using {num_workers} processes")
@@ -421,10 +460,10 @@ class Tokenizer:
             processes=num_workers,
             initializer=_init_pretok_worker,
             initargs=(list(self.special_tokens),),
+            # Recycle workers to prevent RSS from creeping up on long runs (safer on laptops).
             maxtasksperchild=1,
         ) as pool:
             for j, counter in enumerate(pool.imap_unordered(_pretok_count_chunk, tasks, chunksize=1), 1):
-                # Merge counts into self.tokens (keeps your (count, index) structure)
                 for tok_bytes, c in counter.items():
                     if tok_bytes not in self.tokens:
                         self.tokens[tok_bytes] = (c, len(self.tokens))
@@ -493,5 +532,5 @@ class Tokenizer:
         return (self.final_vocab, self.merges)
 
 if __name__ == "__main__":
-    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/TinyStoriesV2-GPT4-train.txt', 10000, ["<|endoftext|>"])
+    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
