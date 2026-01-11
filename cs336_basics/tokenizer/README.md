@@ -1,3 +1,5 @@
+# Experiments with building a BPE Tokenizer
+
 I implemented a subset of Assignment 1 from Stanford's CS 336 (Language Modeling from Scratch) involving Byte-Pair Encoding (BPE) tokenization. I expected a “cute algorithm + a couple unit tests.” What I got was a surprisingly real systems problem: data structures, CPU caches, file I/O, and a lot of “why is this slower?” moments.
 
 All measurements below are from my run log PDF: [BPE Tokenization-Summary.pdf](file:///Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/cs336_basics/logs/BPE%20Tokenization-Summary.pdf).
