@@ -70,7 +70,7 @@ class ReverseBytes:
     def __repr__(self):
         return f"ReverseBytes({self.bytes_obj})"
 
-class Tokenizer:
+class BPEMerging:
     def __init__(self, input_path, vocab_size, special_tokens):
         self.input_path = input_path
         self.vocab_size = vocab_size
@@ -532,5 +532,5 @@ class Tokenizer:
         return (self.final_vocab, self.merges)
 
 if __name__ == "__main__":
-    bpe_tokenizer = Tokenizer('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
+    bpe_tokenizer = BPEMerging('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
