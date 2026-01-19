@@ -407,13 +407,6 @@ class BPEMerging:
         
         print(f'Completed {len(self.merges)} merges in {merge_time:.2f} seconds')
         print(f'Average time per merge: {merge_time / max(len(self.merges), 1):.4f} seconds')
-        # now we print all merges in format (token1, token2)
-        # for i, (t1, t2) in enumerate(self.merges):
-        #     print(f'Merge {i+1}: ({t1}, {t2})')
-        # now we print the final vocabulary in format token_id -> bytes
-        # print('Final Vocabulary:')
-        # for token_id, token_bytes in self.final_vocab.items():
-        #     print(f'Token ID: {token_id}, Bytes: {token_bytes}') if token_id >= 256 else None
         print(f'Final vocabulary size: {len(vocab)}')
 
     def bpe_tokenizer(
