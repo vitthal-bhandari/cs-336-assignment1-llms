@@ -1,0 +1,9 @@
+BPE Tokenization Summary:
+  Total time: 1.28 seconds (0.02 minutes)
+  Pre-tokenization time: 0.53 seconds (41.2%)
+  BPE merging time: 0.75 seconds (58.8%)
+  Vocabulary size: 10000
+  Number of merges: 9743
+  Longest token length (bytes): 15
+  Longest token id: 7427
+  Longest token (utf-8, replace):  accomplishment
