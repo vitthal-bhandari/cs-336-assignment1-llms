@@ -1,4 +1,6 @@
 import os
+import base64
+import json
 import regex as re
 from collections import defaultdict
 from collections import Counter
@@ -94,7 +96,8 @@ class Tokenizer:
             process_text = text_chunk
             tail = ""
         else:
-            tail_len = max(self._max_special_len - 1, 0)
+            # Keep enough tail to avoid splitting a special token across chunks.
+            tail_len = max(self._max_special_len, 0)
             cut = max(0, len(text_chunk) - tail_len)
             process_text = text_chunk[:cut]
             tail = text_chunk[cut:]
@@ -151,3 +154,25 @@ class Tokenizer:
             return ""
         out_bytes = b"".join(self.vocab[_id] for _id in ids)
         return out_bytes.decode("utf-8", errors="replace")
+    
+    @classmethod
+    def from_files(
+        cls,
+        vocab_filepath: str,
+        merges_filepath: str,
+        special_tokens: list[str] | None = None,
+    ) -> "Tokenizer":
+        with open(vocab_filepath, "r", encoding="utf-8") as f:
+            vocab_json = json.load(f)
+        vocab: dict[int, bytes] = {
+            int(token_id): base64.b64decode(token_b64)
+            for token_id, token_b64 in vocab_json.items()
+        }
+
+        with open(merges_filepath, "r", encoding="utf-8") as f:
+            merges_json = json.load(f)
+        merges: list[tuple[bytes, bytes]] = [
+            (base64.b64decode(a), base64.b64decode(b)) for a, b in merges_json
+        ]
+
+        return cls(vocab, merges, special_tokens=special_tokens)

@@ -77,7 +77,7 @@ class BPEMerging:
         self.special_tokens = special_tokens
 
         # Create logs directory if it doesn't exist
-        os.makedirs('cs336_basics/logs', exist_ok=True)
+        os.makedirs('logs', exist_ok=True)
         
         # Get timestamp for filenames
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -245,7 +245,7 @@ class BPEMerging:
 
         # NOTE: this file is a debugging log. We truncate it each run so repeated executions
         # don't append multiple runs and create confusing diffs vs the reference output.
-        merges_path = f'cs336_basics/logs/merges_{self.timestamp}.txt'
+        merges_path = f'logs/merges_log_{self.timestamp}.txt'
         os.makedirs(os.path.dirname(merges_path), exist_ok=True)
         with open(merges_path, "w", encoding="utf-8") as _f:
             _f.write("")
@@ -498,7 +498,7 @@ class BPEMerging:
         longest_token_str = longest_token_bytes.decode("utf-8", errors="replace")
         
         # log above information by creating a new file in logs directory and add current datetime in filename
-        pathname = f'cs336_basics/logs/bpe_tokenization_summary_{self.timestamp}.txt'
+        pathname = f'logs/bpe_tokenization_summary_{self.timestamp}.txt'
         with open(pathname, 'w') as f:
             f.write(f"BPE Tokenization Summary:\n")
             f.write(f"  Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)\n")
@@ -510,20 +510,32 @@ class BPEMerging:
             f.write(f"  Longest token id: {longest_token_id}\n")
             f.write(f"  Longest token (utf-8, replace): {longest_token_str}\n")
         
-        # Convert vocabulary to JSON-serializable format (bytes -> base64 string)
+        # Convert vocabulary to JSON-serializable format (bytes -> base64 string, lossless)
         vocab_json = {
-            str(token_id): token_bytes.decode('utf-8', errors="replace")
+            str(token_id): base64.b64encode(token_bytes).decode("ascii")
             for token_id, token_bytes in self.final_vocab.items()
         }
         
-        # Save the final vocabulary to a json file in logs directory
-        vocab_path = f'cs336_basics/logs/final_vocabulary_{self.timestamp}.json'
+        # Save the final vocabulary to a json file in logs directory (lossless)
+        vocab_path = f'logs/final_vocabulary_{self.timestamp}.json'
         with open(vocab_path, 'w') as f:
             json.dump(vocab_json, f, indent=2)
         
         print(f"Saved vocabulary to: {vocab_path}")
+        # Save merges in a lossless, machine-readable format: list of base64-encoded pairs
+        merges_json = [
+            [
+                base64.b64encode(part1).decode("ascii"),
+                base64.b64encode(part2).decode("ascii"),
+            ]
+            for part1, part2 in self.merges
+        ]
+        merges_path = f'logs/merges_{self.timestamp}.json'
+        with open(merges_path, "w") as f:
+            json.dump(merges_json, f, indent=2)
+        print(f"Saved merges to: {merges_path}")
         return (self.final_vocab, self.merges)
 
 if __name__ == "__main__":
-    bpe_tokenizer = BPEMerging('/Users/vitthalbhandari/Code/cs336/cs-336-assignment1-llms/data/owt_train.txt', 32000, ["<|endoftext|>"])
+    bpe_tokenizer = BPEMerging('../data/owt_train.txt', 32000, ["<|endoftext|>"])
     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
