@@ -537,5 +537,5 @@ class BPEMerging:
         return (self.final_vocab, self.merges)
 
 if __name__ == "__main__":
-    bpe_tokenizer = BPEMerging('../data/owt_train.txt', 32000, ["<|endoftext|>"])
+    bpe_tokenizer = BPEMerging('../data/owt_valid.txt', 32000, ["<|endoftext|>"])
     final_vocab, merges = bpe_tokenizer.bpe_tokenizer()
