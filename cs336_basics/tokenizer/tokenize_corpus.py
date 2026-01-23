@@ -33,6 +33,7 @@ class Tokenizer:
         else:
             self._special_re = None
             self._max_special_len = 0
+        self._bpe_cache: dict[bytes, list[bytes]] = {}
         
         def default_tok_value():
             return (0, 0)
@@ -45,6 +46,9 @@ class Tokenizer:
         # Start from byte-level tokens, iteratively merge best-ranked pairs.
         if not token_bytes:
             return []
+        cached = self._bpe_cache.get(token_bytes)
+        if cached is not None:
+            return cached
         tokens = [bytes([b]) for b in token_bytes]
         while True:
             best_rank = None
@@ -72,6 +76,7 @@ class Tokenizer:
                     merged.append(tokens[i])
                     i += 1
             tokens = merged
+        self._bpe_cache[token_bytes] = tokens
         return tokens
 
     def _tokenize_segment(self, segment: str, defer_last: bool) -> tuple[list[bytes], str]:
