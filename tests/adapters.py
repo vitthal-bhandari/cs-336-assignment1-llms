@@ -13,6 +13,7 @@ from cs336_basics.tokenizer.tokenize_corpus import Tokenizer
 from cs336_basics.transformer.linear_module import LinearModule
 from cs336_basics.transformer.embedding_module import EmbeddingModule
 from cs336_basics.transformer.rmsnorm_module import RMSNormModule
+from cs336_basics.transformer.positionwise_ffn import PositionwiseFFN
 
 def run_linear(
     d_in: int,
@@ -91,7 +92,9 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    positionwise_ffn = PositionwiseFFN(d_model, d_ff)
+    positionwise_ffn.load_state_dict({"W1": w1_weight, "W2": w2_weight, "W3": w3_weight})
+    return positionwise_ffn(in_features)
 
 
 def run_scaled_dot_product_attention(
