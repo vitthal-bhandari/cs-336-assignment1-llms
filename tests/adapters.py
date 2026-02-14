@@ -10,7 +10,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from cs336_basics.tokenizer.bpe_merging import BPEMerging
 from cs336_basics.tokenizer.tokenize_corpus import Tokenizer
-from cs336_basics.transformer import Utility, LinearModule, EmbeddingModule, RMSNormModule, PositionwiseFFN, RotaryPositionalEmbedding, MultiheadSelfAttention
+from cs336_basics.transformer import Utility, LinearModule, EmbeddingModule, RMSNormModule, PositionwiseFFN, RotaryPositionalEmbedding, MultiheadSelfAttention, TransformerBlock
 
 def run_linear(
     d_in: int,
@@ -286,7 +286,11 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len)
+    transformer_block.load_state_dict({"multihead_attention.W_q.W": weights["attn.q_proj.weight"], "multihead_attention.W_k.W": weights["attn.k_proj.weight"], 
+    "multihead_attention.W_v.W": weights["attn.v_proj.weight"], "multihead_attention.W_o.W": weights["attn.output_proj.weight"], "rms_norm1.W": weights["ln1.weight"], 
+    "positionwise_ffn.W1": weights["ffn.w1.weight"], "positionwise_ffn.W2": weights["ffn.w2.weight"], "positionwise_ffn.W3": weights["ffn.w3.weight"], "rms_norm2.W": weights["ln2.weight"]})
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(

@@ -5,6 +5,7 @@ from cs336_basics.transformer.rmsnorm_module import RMSNormModule
 from cs336_basics.transformer.positionwise_ffn import PositionwiseFFN
 from cs336_basics.transformer.rope_embedding import RotaryPositionalEmbedding
 from cs336_basics.transformer.multihead_self_attention import MultiheadSelfAttention
+from cs336_basics.transformer.transformer_block import TransformerBlock
 
 __all__ = [
     "Utility",
@@ -13,5 +14,6 @@ __all__ = [
     "RMSNormModule",
     "PositionwiseFFN",
     "RotaryPositionalEmbedding",
-    "MultiheadSelfAttention"
+    "MultiheadSelfAttention",
+    "TransformerBlock",
 ]
